@@ -362,6 +362,10 @@ table{border-collapse:collapse;width:100%;font-size:11px;margin-top:8px} td,th{b
 input[type=checkbox]{accent-color:#11796e;vertical-align:middle;margin-right:3px}
 #status{font-size:12px;color:#315d5a;overflow-wrap:anywhere} #error{color:#a13f29;font-size:12px;white-space:pre-wrap}
 .results{display:grid;grid-template-columns:minmax(0,1fr) minmax(250px, .57fr);gap:14px;align-items:start}
+.analysis-nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.analysis-nav button{padding:8px 12px}
+.analysis-nav [aria-pressed="true"]{background:#116d64;border-color:#116d64;color:white;font-weight:600}
+#bic button{padding:3px 8px}
 .plotPanel{padding:11px} .plotPanel .row{justify-content:space-between;padding:3px 5px 6px} .plotPanel .row>*{flex:0 0 auto} .plotPanel h2{margin:0}
 img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 .stats{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 10px}
@@ -390,12 +394,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <div class="row bounds" id="ybounds" hidden><label>Y 最小値<input id="ymin" type="number" step="any"></label><label>Y 最大値<input id="ymax" type="number" step="any"></label></div></div>
 <label><input type="checkbox" id="equal">X・Yの1単位を同じ長さで表示</label>
 </section>
-<section class="panel"><h2><span class="step">3.</span>表示・分析方法</h2>
-<label class="field">方法<select id="mode">
-<option value="scatter">散布図・正規性診断</option>
-<option value="kde">密度等高線（KDE）</option>
-<option value="gmm">成分数の比較（GMM）</option>
-</select></label>
+<section class="panel"><h2><span class="step">3.</span>分析の設定</h2>
 <div id="kde-fields" hidden>
 <label class="field">帯域幅（Scott基準の倍率）<input id="bandwidth" type="number" min="0.25" max="3" step="0.05" value="1"></label>
 </div>
@@ -418,31 +417,48 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <label><input type="checkbox" id="tail" checked>99%領域の外側の点を強調</label>
 </div>
 </section>
-<button id="update" class="primary" disabled>散布図を更新</button><p id="status" role="status"></p><p id="error" role="alert"></p>
+<button id="update" class="primary" disabled>図を更新</button><p id="status" role="status"></p><p id="error" role="alert"></p>
 </aside>
 <div>
+<div class="analysis-nav" role="group" aria-label="分析方法">
+<button type="button" data-method="scatter" aria-pressed="true" disabled>散布図・正規性診断</button>
+<button type="button" data-method="kde" aria-pressed="false" disabled>密度等高線（KDE）</button>
+<button type="button" data-method="gmm" aria-pressed="false" disabled>成分数の比較（GMM）</button>
+</div>
 <div class="stats" id="stats" hidden><span class="metric">有効<b id="valid"></b></span><span class="metric">除外<b id="excluded"></b></span><span class="metric">表示範囲外<b id="clipped"></b></span></div>
 <div class="results">
-<section class="panel plotPanel"><div class="row"><h2>散布図</h2><button id="save" disabled>PNGを保存</button></div><img id="plot" alt="選択した変数の散布図と確率楕円"></section>
+<section class="panel plotPanel"><div class="row"><h2 id="plot-title">散布図</h2><button id="save" disabled>PNGを保存</button></div><img id="plot" alt="選択した分析方法の結果"></section>
 <div class="diagnostics">
 <section class="panel"><h2>二変量正規性</h2><p id="decision" class="diagnosis"></p><p id="hz"></p><small id="test-note"></small><img id="qq" alt="マハラノビス距離の二乗と理論カイ二乗分位点の比較"><small id="qq-note" hidden>点が破線に沿うほど、観測距離の分布が理論分布に近くなります。</small></section>
 <section class="panel" id="ellipse-panel" hidden><h2>楕円内の観測点</h2><div id="cover"></div><p><small id="tail-count"></small></p></section>
 <section class="panel" id="mixture-panel" hidden>
 <h2>成分数の比較</h2><p id="mixture-summary"></p><table id="bic"></table>
-<small>BICは小さいほど支持されます。同じ共分散設定で比較してください。</small></section>
+<small>成分数を押すと図が切り替わります。BICは同じ共分散設定で比較してください。</small></section>
 <p id="analysis-warning" role="status"></p>
 </div></div>
 </div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
-let current = null, last = null, busy = false;
+const methods = [...document.querySelectorAll('[data-method]')];
+const titles = {scatter:'散布図', kde:'密度等高線（KDE）', gmm:'成分数の比較（GMM）'};
+let current = null, last = null, busy = false, mode = 'scatter';
+
+function showMode(next) {
+  mode = next;
+  for (const button of methods) {
+    const method = button.dataset.method;
+    button.setAttribute('aria-pressed', method === mode);
+    $(method+'-fields').hidden = method !== mode;
+  }
+}
 function state(text) { $('status').textContent = text; }
 function setBusy(value) {
   busy = value;
   $('file').disabled = value;
   $('update').disabled = value || !current;
   $('save').disabled = value || !last;
+  for (const button of methods) button.disabled = value || !current;
 }
 async function call(url, payload) {
   const response = await fetch(url, payload ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)} : {});
@@ -492,11 +508,12 @@ function install(info, name) {
   table($('preview'), info.headers.slice(0,20), info.preview.map(row => row.slice(0,20)));
 }
 async function plot() {
-  const options = {csv:current.csv};
-  for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse','mode','bandwidth','covariance','components']) options[key] = $(key).value;
+  const options = {csv:current.csv, mode};
+  for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse','bandwidth','covariance','components']) options[key] = $(key).value;
   for (const key of ['equal','tail']) options[key] = $(key).checked;
   options.levels = [...document.querySelectorAll('[name=level]:checked')].map(el=>el.value);
   const data = await call('/analyse', options);
+  $('plot-title').textContent = titles[data.mode];
   $('plot').src = 'data:image/png;base64,'+data.plot;
   if (data.qq) $('qq').src = 'data:image/png;base64,'+data.qq;
   else $('qq').removeAttribute('src');
@@ -518,6 +535,18 @@ async function plot() {
     row.k, row.bic.toFixed(1),
     [row.k === data.best ? '最小' : '', row.k === data.selected && data.counts.length ? '表示中' : ''].filter(Boolean).join('・')
   ]));
+  data.comparison.forEach((row, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = row.k;
+    button.setAttribute('aria-label', row.k+'成分を表示');
+    button.onclick = () => action(async () => {
+      $('components').value = row.k;
+      state('計算・描画中…');
+      await plot();
+    });
+    $('bic').rows[index+1].cells[0].replaceChildren(button);
+  });
   $('cover').replaceChildren();
   if (data.summaries.length) {
     const t = document.createElement('table');
@@ -559,11 +588,15 @@ for (const axis of ['x','y']) {
   $(axis).onchange = () => { $(axis+'label').value = current.headers[$(axis).value]; };
   $(axis+'mode').onchange = () => { $(axis+'bounds').hidden = $(axis+'mode').value !== 'manual'; };
 }
-$('mode').onchange = () => {
-  const mode = $('mode').value;
-  for (const method of ['scatter','kde','gmm']) $(method+'-fields').hidden = mode !== method;
-  if (current) state('方法を変更しました。「散布図を更新」で表示します。');
-};
+for (const button of methods) {
+  button.onclick = () => action(async () => {
+    const previous = mode;
+    showMode(button.dataset.method);
+    state('計算・描画中…');
+    try { await plot(); }
+    catch (err) { showMode(previous); throw err; }
+  });
+}
 $('update').onclick = () => action(async () => {
   if (!current) throw new Error('CSVを選択してください。');
   state('計算・描画中…');
