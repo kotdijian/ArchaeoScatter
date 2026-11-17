@@ -21,7 +21,6 @@ from scipy.stats import chi2
 
 LEVELS = {"50": .5, "66.7": 2/3, "90": .9, "95": .95}
 COLORS = {"50": "#11796e", "66.7": "#386ba0", "90": "#875691", "95": "#ab572e"}
-DEMO_NAME = "pottery_demo.csv"
 for family in ("Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic", "Meiryo", "IPA Gothic"):
     if any(font.name == family for font in font_manager.fontManager.ttflist):
         rcParams["font.family"] = [family, "DejaVu Sans"]
@@ -181,7 +180,7 @@ def analyse(request):
     display = request["ellipse"]
     draw = values is not None and (display == "always"
                                    or (display == "auto" and p is not None and p >= .05))
-    fig, ax = figure("土器の口径と器高" if request["demo_axes"] else "二変量散布図", 7.4, 5.05)
+    fig, ax = figure("二変量散布図", 7.4, 5.05)
     ax.set(xlabel=labels[0], ylabel=labels[1])
     n = len(points)
     outside_view = 0
@@ -292,8 +291,8 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <header><div><h1>archaeo_scatter</h1><p>CSVから、散布図・正規性診断・確率楕円を作成</p></div></header>
 <main><aside>
 <section class="panel"><h2><span class="step">1.</span>データを選ぶ</h2>
-<div class="buttons"><button id="demo">土器デモを開く</button><input type="file" id="file" accept=".csv,text/csv"><label class="fileButton" for="file">CSVを開く</label></div>
-<p id="name" class="muted"></p>
+<div class="buttons"><input type="file" id="file" accept=".csv,text/csv"><label class="fileButton" for="file">CSVを開く</label></div>
+<p id="name" class="muted">CSVを選択してください。</p>
 <div class="row"><label class="field">Xの列<select id="x"></select></label><label class="field">Yの列<select id="y"></select></label></div>
 <details><summary>CSVプレビュー・資料ID</summary>
 <label class="field">資料IDの列<select id="id"></select></label><div class="scroll"><table id="preview"></table></div></details>
@@ -317,7 +316,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 </div>
 <label><input type="checkbox" id="tail" checked>99%領域の外側の点を強調</label>
 </section>
-<button id="update" class="primary">散布図を更新</button><p id="status" role="status"></p><p id="error" role="alert"></p>
+<button id="update" class="primary" disabled>散布図を更新</button><p id="status" role="status"></p><p id="error" role="alert"></p>
 </aside>
 <div>
 <div class="stats" id="stats" hidden><span class="metric">有効<b id="valid"></b></span><span class="metric">除外<b id="excluded"></b></span><span class="metric">表示範囲外<b id="clipped"></b></span></div>
@@ -335,7 +334,8 @@ let current = null, last = null, busy = false;
 function state(text) { $('status').textContent = text; }
 function setBusy(value) {
   busy = value;
-  $('update').disabled = $('demo').disabled = $('file').disabled = value;
+  $('file').disabled = value;
+  $('update').disabled = value || !current;
   $('save').disabled = value || !last;
 }
 async function call(url, payload) {
@@ -356,8 +356,8 @@ function table(target, headers, rows) {
     }
   }
 }
-function install(info, isDemo, name) {
-  current = {...info, isDemo};
+function install(info, name) {
+  current = info;
   last = null;
   $('plot').removeAttribute('src');
   $('qq').removeAttribute('src');
@@ -373,21 +373,20 @@ function install(info, isDemo, name) {
   }
   $('x').value = info.suggested[0];
   $('y').value = info.suggested[1];
-  $('id').value = isDemo ? 0 : -1;
+  $('id').value = -1;
   for (const axis of ['x','y']) {
     $(axis+'label').value = info.headers[$(axis).value];
     $(axis+'mode').value = 'auto';
     $(axis+'bounds').hidden = true;
     $(axis+'min').value = $(axis+'max').value = '';
   }
-  $('equal').checked = isDemo;
+  $('equal').checked = false;
   table($('preview'), info.headers.slice(0,20), info.preview.map(row => row.slice(0,20)));
 }
 async function plot() {
   const options = {csv:current.csv};
   for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse']) options[key] = $(key).value;
   for (const key of ['equal','tail']) options[key] = $(key).checked;
-  options.demo_axes = current.isDemo && options.x === '1' && options.y === '2';
   options.levels = [...document.querySelectorAll('[name=level]:checked')].map(el=>el.value);
   const data = await call('/analyse', options);
   $('plot').src = 'data:image/png;base64,'+data.plot;
@@ -422,12 +421,6 @@ async function action(fn) {
   try { await fn(); } catch (err) { error(err); }
   finally { setBusy(false); }
 }
-function showDemo() { return action(async () => {
-  state('土器デモを読み込み中…');
-  install(await call('/demo'),true,'pottery_demo.csv');
-  await plot();
-}); }
-$('demo').onclick = showDemo;
 $('file').onchange = () => action(async () => {
   const file = $('file').files[0];
   if (!file) return;
@@ -440,7 +433,7 @@ $('file').onchange = () => action(async () => {
       reader.onerror=()=>reject(new Error('CSVを読み込めませんでした。'));
       reader.readAsDataURL(file);
     });
-    install(await call('/inspect',{csv}),false,file.name);
+    install(await call('/inspect',{csv}),file.name);
     await plot();
   } finally { $('file').value=''; }
 });
@@ -449,7 +442,7 @@ for (const axis of ['x','y']) {
   $(axis+'mode').onchange = () => { $(axis+'bounds').hidden = $(axis+'mode').value !== 'manual'; };
 }
 $('update').onclick = () => action(async () => {
-  if (!current) throw new Error('CSVを選ぶか土器デモを開いてください。');
+  if (!current) throw new Error('CSVを選択してください。');
   state('計算・描画中…');
   await plot();
 });
@@ -458,11 +451,10 @@ $('save').onclick = () => action(async () => {
   const data = await call('/analyse', {...last, download:true});
   const link = document.createElement('a');
   link.href = 'data:image/png;base64,'+data.plot;
-  link.download = last.demo_axes ? 'pottery_scatter.png' : 'scatterplot.png';
+  link.download = 'scatterplot.png';
   link.click();
   state('描画済みの散布図をPNGに書き出しました。');
 });
-showDemo();
 </script></body></html>"""
 
 
@@ -489,8 +481,6 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             self.reply(PAGE, html=True)
-        elif self.path == "/demo":
-            self.reply(inspect(demo_csv().encode("utf-8-sig")))
         else:
             self.reply({"error": "ページが見つかりません。"}, 404)
 
