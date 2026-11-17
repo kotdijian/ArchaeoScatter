@@ -17,7 +17,8 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 import numpy as np
 from scipy.spatial.distance import pdist
-from scipy.stats import chi2
+from scipy.stats import chi2, gaussian_kde
+from sklearn.mixture import GaussianMixture
 
 LEVELS = {"50": .5, "66.7": 2/3, "90": .9, "95": .95}
 COLORS = {"50": "#11796e", "66.7": "#386ba0", "90": "#875691", "95": "#ab572e"}
@@ -166,6 +167,33 @@ def png(fig, dpi):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+@lru_cache(maxsize=4)
+def fit_mixtures(raw, x_col, y_col, covariance):
+    points = diagnostics(raw, x_col, y_col, -1)[2]
+    candidates = {}
+    unique = len(np.unique(points, axis=0))
+    for k in range(1, min(6, len(points) // 2, unique) + 1):
+        model = GaussianMixture(k, covariance_type=covariance, n_init=8,
+                                random_state=12, reg_covar=1e-5).fit(points)
+        if model.converged_:
+            candidates[k] = model, float(model.bic(points))
+    return candidates
+
+
+def density_overlay(ax, points, bandwidth):
+    kernel = gaussian_kde(points.T, bw_method="scott")
+    kernel.set_bandwidth(kernel.factor * bandwidth)
+    lower, upper = points.min(axis=0), points.max(axis=0)
+    margin = (upper - lower) * .16
+    x, y = [np.linspace(lo, hi, 110) for lo, hi in zip(lower-margin, upper+margin)]
+    xx, yy = np.meshgrid(x, y)
+    density = kernel(np.vstack((xx.ravel(), yy.ravel()))).reshape(xx.shape)
+    levels = density.max() * np.array([.1, .25, .4, .55, .7, .85, 1.01])
+    ax.contourf(xx, yy, density, levels=levels, cmap="BuGn", alpha=.48, zorder=1)
+    ax.contour(xx, yy, density, levels=levels[:-1], colors="#32756e",
+               linewidths=.8, zorder=2)
+
+
 def analyse(request):
     raw = base64.b64decode(request["csv"], validate=True)
     x_col, y_col, id_col = (int(request[key]) for key in ("x", "y", "id"))
@@ -177,26 +205,82 @@ def analyse(request):
     for key in ("x", "y"):
         if request[key+"mode"] == "manual":
             limits[key] = validated_limits(request[key+"min"], request[key+"max"])
+    mode = request.get("mode", "scatter")
+    if mode not in {"scatter", "kde", "gmm"}:
+        raise ValueError("分析方法を確認してください。")
+    warning = ""
+    comparison = []
+    assignments = None
+    selected = best = None
+    bandwidth = None
+    if mode != "scatter" and (len(points) < 5 or values is None):
+        warning = "KDE・GMMには、二次元に広がる有効データが5点以上必要です。散布図を表示します。"
+    elif mode == "gmm":
+        covariance = request.get("covariance", "full")
+        if covariance not in {"full", "tied"}:
+            raise ValueError("共分散の設定を確認してください。")
+        candidates = fit_mixtures(raw, x_col, y_col, covariance)
+        if candidates:
+            best = min(candidates, key=lambda k: candidates[k][1])
+            choice = request.get("components", "auto")
+            selected = best if choice == "auto" else int(choice)
+            if selected in candidates:
+                model = candidates[selected][0]
+                order = np.lexsort((model.means_[:, 1], model.means_[:, 0]))
+                assignments = model.predict_proba(points)[:, order].argmax(axis=1)
+            else:
+                warning = "指定した成分数のモデルを表示できません。比較表から別の成分数を選んでください。"
+            comparison = [{"k": k, "bic": bic} for k, (_, bic) in candidates.items()]
+        else:
+            warning = "収束したモデルがありません。散布図を表示します。"
+    elif mode == "kde":
+        bandwidth = float(request.get("bandwidth", 1))
+        if not .25 <= bandwidth <= 3:
+            raise ValueError("帯域幅はScottの基準の0.25〜3倍で指定してください。")
     display = request["ellipse"]
-    draw = values is not None and (display == "always"
+    draw = mode == "scatter" and values is not None and (display == "always"
                                    or (display == "auto" and p is not None and p >= .05))
-    fig, ax = figure("二変量散布図", 7.4, 5.05)
+    title = "二変量散布図"
+    if bandwidth is not None:
+        title = f"密度等高線（KDE・Scott × {bandwidth:g}）"
+    elif assignments is not None:
+        title = f"ガウス混合モデル（{selected}成分）"
+    fig, ax = figure(title, 7.4, 5.05)
     ax.set(xlabel=labels[0], ylabel=labels[1])
     n = len(points)
     outside_view = 0
+    tail_count = None
     summaries = []
+    handles = []
+    counts = []
+    if bandwidth is not None:
+        try:
+            density_overlay(ax, points, bandwidth)
+        except np.linalg.LinAlgError:
+            warning = "密度を推定できません。散布図を表示します。"
     if n:
         all_x, all_y = points.T
-        ax.scatter(all_x, all_y, s=26, c="#294d66", edgecolors="white",
-                   linewidths=.42, alpha=.77, zorder=3)
+        if assignments is None:
+            ax.scatter(all_x, all_y, s=26, c="#294d66", edgecolors="white",
+                       linewidths=.42, alpha=.77, zorder=3)
+        else:
+            palette = ("#226994", "#ac4c27", "#715197", "#287963", "#8c6a24", "#974267")
+            for i in range(selected):
+                group = points[assignments == i]
+                counts.append(len(group))
+                handles.append(ax.scatter(*group.T, s=28, c=palette[i], edgecolors="white",
+                                          linewidths=.42, zorder=3,
+                                          label=f"成分 {i+1}（{len(group)}点）"))
         clipped = np.zeros(n, dtype=bool)
         for key, data_axis in (("x", all_x), ("y", all_y)):
             if key in limits:
                 lower, upper = limits[key]
                 clipped |= (data_axis < lower) | (data_axis > upper)
         outside_view = int(clipped.sum())
-        if d2 is not None:
-            tail = (d2 > chi2.ppf(.99, 2)) & ~clipped
+        if mode == "scatter" and d2 is not None:
+            outside = d2 > chi2.ppf(.99, 2)
+            tail_count = int(outside.sum())
+            tail = outside & ~clipped
             if np.any(tail) and request["tail"]:
                 ax.scatter(all_x[tail], all_y[tail], s=82, facecolors="none",
                            edgecolors="#ae562c", linewidths=1.3, zorder=4)
@@ -210,7 +294,6 @@ def analyse(request):
     else:
         ax.text(.5, .5, "選択した列に有効な数値の組がありません", transform=ax.transAxes,
                 ha="center", color="#49616c")
-    handles = []
     if draw:
         theta = np.linspace(0, 2*np.pi, 361)
         unit_circle = np.array([np.cos(theta), np.sin(theta)])
@@ -224,7 +307,7 @@ def analyse(request):
             handles.append(Line2D([], [], color=color, label=f"モデル上 {level}%"))
             summaries.append({"level": level, "inside": int((d2 <= cutoff).sum()),
                               "scale": round(float(np.sqrt(cutoff)), 3)})
-    if d2 is not None and request["tail"] and np.any(tail):
+    if tail_count and request["tail"] and np.any(tail):
         handles.append(Line2D([], [], linestyle="none", marker="o", markerfacecolor="none",
                               markeredgecolor="#ae562c", label="99%領域の外側"))
     if handles:
@@ -249,8 +332,9 @@ def analyse(request):
         qq = png(qq_fig, 120)
     return {"plot": png(fig, 135), "qq": qq, "total": len(rows), "n": n,
             "p": p, "hz": hz, "n_test": n_test, "reason": reason, "summaries": summaries,
-            "clipped": outside_view, "tail": int((d2 > chi2.ppf(.99, 2)).sum()) if d2 is not None else None,
-            "draw": draw}
+            "clipped": outside_view, "tail": tail_count, "draw": draw,
+            "mode": mode, "warning": warning, "comparison": comparison,
+            "selected": selected, "best": best, "counts": counts}
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -306,7 +390,24 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <div class="row bounds" id="ybounds" hidden><label>Y 最小値<input id="ymin" type="number" step="any"></label><label>Y 最大値<input id="ymax" type="number" step="any"></label></div></div>
 <label><input type="checkbox" id="equal">X・Yの1単位を同じ長さで表示</label>
 </section>
-<section class="panel"><h2><span class="step">3.</span>確率楕円を設定する</h2>
+<section class="panel"><h2><span class="step">3.</span>表示・分析方法</h2>
+<label class="field">方法<select id="mode">
+<option value="scatter">散布図・正規性診断</option>
+<option value="kde">密度等高線（KDE）</option>
+<option value="gmm">成分数の比較（GMM）</option>
+</select></label>
+<div id="kde-fields" hidden>
+<label class="field">帯域幅（Scott基準の倍率）<input id="bandwidth" type="number" min="0.25" max="3" step="0.05" value="1"></label>
+</div>
+<div id="gmm-fields" hidden>
+<label class="field">共分散<select id="covariance"><option value="full">成分ごと</option><option value="tied">全成分で共通</option></select></label>
+<label class="field">表示する成分数<select id="components">
+<option value="auto">自動（BIC最小）</option>
+<option value="1">1</option><option value="2">2</option><option value="3">3</option>
+<option value="4">4</option><option value="5">5</option><option value="6">6</option>
+</select></label>
+</div>
+<div id="scatter-fields">
 <label class="field">表示方法<select id="ellipse"><option value="auto">自動（正規性を棄却しない場合）</option><option value="always">常に表示（参考）</option><option value="off">非表示</option></select></label>
 <div class="options" aria-label="モデル上の包含確率">
 <label><input type="checkbox" name="level" value="50" checked>50%</label>
@@ -315,6 +416,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <label><input type="checkbox" name="level" value="95" checked>95%</label>
 </div>
 <label><input type="checkbox" id="tail" checked>99%領域の外側の点を強調</label>
+</div>
 </section>
 <button id="update" class="primary" disabled>散布図を更新</button><p id="status" role="status"></p><p id="error" role="alert"></p>
 </aside>
@@ -324,7 +426,11 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <section class="panel plotPanel"><div class="row"><h2>散布図</h2><button id="save" disabled>PNGを保存</button></div><img id="plot" alt="選択した変数の散布図と確率楕円"></section>
 <div class="diagnostics">
 <section class="panel"><h2>二変量正規性</h2><p id="decision" class="diagnosis"></p><p id="hz"></p><small id="test-note"></small><img id="qq" alt="マハラノビス距離の二乗と理論カイ二乗分位点の比較"><small id="qq-note" hidden>点が破線に沿うほど、観測距離の分布が理論分布に近くなります。</small></section>
-<section class="panel"><h2>楕円内の観測点</h2><div id="cover"></div><p><small id="tail-count"></small></p></section>
+<section class="panel" id="ellipse-panel" hidden><h2>楕円内の観測点</h2><div id="cover"></div><p><small id="tail-count"></small></p></section>
+<section class="panel" id="mixture-panel" hidden>
+<h2>成分数の比較</h2><p id="mixture-summary"></p><table id="bic"></table>
+<small>BICは小さいほど支持されます。同じ共分散設定で比較してください。</small></section>
+<p id="analysis-warning" role="status"></p>
 </div></div>
 </div>
 </main>
@@ -359,6 +465,8 @@ function table(target, headers, rows) {
 function install(info, name) {
   current = info;
   last = null;
+  $('mixture-panel').hidden = $('ellipse-panel').hidden = true;
+  $('analysis-warning').textContent = '';
   $('plot').removeAttribute('src');
   $('qq').removeAttribute('src');
   $('qq-note').hidden = true;
@@ -385,7 +493,7 @@ function install(info, name) {
 }
 async function plot() {
   const options = {csv:current.csv};
-  for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse']) options[key] = $(key).value;
+  for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse','mode','bandwidth','covariance','components']) options[key] = $(key).value;
   for (const key of ['equal','tail']) options[key] = $(key).checked;
   options.levels = [...document.querySelectorAll('[name=level]:checked')].map(el=>el.value);
   const data = await call('/analyse', options);
@@ -400,6 +508,16 @@ async function plot() {
   $('decision').textContent = data.p === null ? '判定保留' : (data.p < .05 ? '正規性を棄却' : '正規性を棄却せず');
   $('hz').textContent = data.p === null ? data.reason : 'Henze–Zirkler　p = '+data.p.toFixed(3);
   $('test-note').textContent = data.p === null ? '' : '有意水準 5% ・ Monte Carlo 499回'+(data.n_test < data.n ? ' ・ 検定は無作為抽出した '+data.n_test+'点' : '');
+  $('ellipse-panel').hidden = data.mode !== 'scatter';
+  $('mixture-panel').hidden = data.mode !== 'gmm' || !data.comparison.length;
+  $('analysis-warning').textContent = data.warning;
+  $('mixture-summary').textContent = data.selected && data.counts.length
+    ? '表示中：'+data.selected+'成分（'+data.counts.join(' / ')+'点）'
+    : '';
+  table($('bic'), ['成分数','BIC',''], data.comparison.map(row => [
+    row.k, row.bic.toFixed(1),
+    [row.k === data.best ? '最小' : '', row.k === data.selected && data.counts.length ? '表示中' : ''].filter(Boolean).join('・')
+  ]));
   $('cover').replaceChildren();
   if (data.summaries.length) {
     const t = document.createElement('table');
@@ -441,6 +559,11 @@ for (const axis of ['x','y']) {
   $(axis).onchange = () => { $(axis+'label').value = current.headers[$(axis).value]; };
   $(axis+'mode').onchange = () => { $(axis+'bounds').hidden = $(axis+'mode').value !== 'manual'; };
 }
+$('mode').onchange = () => {
+  const mode = $('mode').value;
+  for (const method of ['scatter','kde','gmm']) $(method+'-fields').hidden = mode !== method;
+  if (current) state('方法を変更しました。「散布図を更新」で表示します。');
+};
 $('update').onclick = () => action(async () => {
   if (!current) throw new Error('CSVを選択してください。');
   state('計算・描画中…');
