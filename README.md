@@ -2,155 +2,209 @@
 
 考古資料の二つの数値属性を比較する、Python製の散布図ジェネレーターです。土器の口径・器高のほか、石器の長さ・幅など、資料ごとに2変量を記録したCSVを扱えます。GUIは手元のブラウザで開き、CSVはローカルのPythonプロセスで処理します。
 
-| 利用方法 | できること |
-|---|---|
-| **現行GUI** | CSV読込、X・Y列と資料ID列の選択、軸設定、散布図、二変量正規性診断、確率楕円、PNG保存 |
-| **サンプル再現コマンド** | 群別の確率楕円・Bagplot、KDE、GMMの2・3・4成分比較、3成分での再編成前後の比較 |
-| **次版GUIの設計** | 元ラベルによる分類表示、分布に応じた重ね描き、クラスターの検証と採用群の編集 |
-
 - [はじめて使う方へ](#setup)
-- [サンプル1　正規性と確率楕円](#sample-normal)
-- [サンプル2　元の分類、KDE、クラスターの再編成](#sample-mixture)
+- [実行手順と出力](#workflows)
+  - [1. 2変量のシンプルなデータを描く](#sample-normal)
+  - [2. ラベル付きの2変量データを群別に見る](#sample-mixture)
+  - [3. ラベル付きの2変量データの分類を再評価する](#review-labels)
 - [GUI設計](#gui-design)
 
 <a id="setup"></a>
 ## はじめて使う方へ
 
-[ArtefactsOrthoMaker（AOM）のREADME](https://github.com/kotdijian/ArtefactsOrthoMaker#python-environment)に合わせ、**Pythonの導入 → フォルダの準備 → 初期設定と起動**の順に進めます。Python **3.13.x** を推奨します。各コードブロックのコマンドは、macOSでは「ターミナル」、Windowsでは「PowerShell」に1行ずつ入力します。
+[ArtefactsOrthoMaker（AOM）のREADME](https://github.com/kotdijian/ArtefactsOrthoMaker#python-environment)に合わせ、**Pythonの導入 → ZIPの展開 → プロジェクトフォルダからPowerShellまたはターミナルを開く → 初期設定と起動**の順に進めます。Python **3.13.x** を推奨します。コマンドは1行ずつ入力し、Enterを押してください。
 
 ### 1. Pythonを導入する
 
-**macOS**
+#### Windows
 
-1. [Python公式のmacOSダウンロードページ](https://www.python.org/downloads/macos/)で、Python 3.13系列の **macOS 64-bit universal2 installer** を選びます。Apple SiliconとIntel Macに対応します。
-2. ダウンロードした `.pkg` を開き、案内に沿ってインストールします。
-3. 新しいターミナルで次を実行し、`Python 3.13.x` が表示されることを確認します。すでに表示される場合はフォルダの準備へ進みます。
+スタートメニューからPowerShellを開き、`py -3.13 --version` を実行します。結果が `Python 3.13.` で始まれば **A** と控え、手順2へ進みます。それ以外の場合は `python --version` を実行し、`Python 3.13.` で始まれば **B** と控え、手順2へ進みます。Microsoft Storeが開いた場合は閉じてください。
 
-```bash
-python3.13 --version
-```
-
-**Windows**
-
-1. [Python公式のWindowsダウンロードページ](https://www.python.org/downloads/windows/)から **Python install manager** を取得し、`.msix` を開いてインストールします。
-2. 新しいPowerShellで次を実行します。すでに `py -3.13 --version` で `Python 3.13.x` が表示される場合はフォルダの準備へ進みます。
+Python 3.13が使えない場合は、[Python公式のWindowsダウンロードページ](https://www.python.org/downloads/windows/)から **Python install manager** を入手し、`.msix` を開いてインストールします。新しいPowerShellで次を実行し、`Python 3.13.` で始まる表示を確認したら **A** と控えます。
 
 ```powershell
 py install 3.13
 py -3.13 --version
 ```
 
-古いPythonランチャーが先に呼び出されて `py install` が動かない場合は、`pymanager install 3.13`、`pymanager exec -V:3.13 --version` の順に実行します。
+古いランチャーが優先されるなどして失敗した場合は、次の2行を実行します。2行目に `Python 3.13.` で始まる表示が出たら **C** と控えます。
 
-### 2. プロジェクトフォルダを準備する
-
-1. [GitHubのリポジトリ](https://github.com/kotdijian/ArchaeoScatter)で **Code → Download ZIP** を選びます。
-2. macOSではZIPをダブルクリックし、Windowsでは右クリックして **すべて展開** を選びます。
-3. 展開した `ArchaeoScatter-main` を開き、`archaeo_scatter.py` と `requirements.txt` が並ぶフォルダを確認します。以後、このフォルダでコマンドを実行します。Gitを使う場合は `git clone https://github.com/kotdijian/ArchaeoScatter.git` でも取得できます。
-
-### 3. 初期設定と起動
+```powershell
+pymanager install 3.13
+pymanager exec -V:3.13 --version
+```
 
 #### macOS
 
-ターミナルに `cd` と半角スペースを入力し、FinderからプロジェクトフォルダをドラッグしてEnterを押します。以下でアプリ専用の仮想環境 `venv` を作り、必要なパッケージを導入します。
+ターミナルで `python3.13 --version` を実行し、`Python 3.13.` で始まる表示が出れば手順2へ進みます。使えない場合は、[Python公式のmacOSダウンロードページ](https://www.python.org/downloads/macos/)からPython 3.13系列の **macOS 64-bit universal2 installer** を取得します。`.pkg` を開いてインストールし、新しいターミナルで確認します。
 
 ```bash
-ls
-python3.13 -m venv venv
-./venv/bin/python -m pip install --upgrade pip
-./venv/bin/python -m pip install -r requirements.txt
-./venv/bin/python -m pip check
-./venv/bin/python archaeo_scatter.py
+python3.13 --version
 ```
+
+### 2. ZIPを展開し、プロジェクトフォルダから開く
+
+1. [GitHubのリポジトリ](https://github.com/kotdijian/ArchaeoScatter)で **Code → Download ZIP** を選びます。
+2. WindowsではZIPを右クリックして **すべて展開**、macOSではZIPをダブルクリックします。
+3. 展開した `ArchaeoScatter-main` の中で、`archaeo_scatter.py` と `requirements.txt` が並ぶフォルダを確認します。すでにアプリ一式を配置済み、またはGitでクローン済みの場合は、両ファイルが見える既存フォルダを使います。
+4. Pythonの導入・バージョン確認とZIPの展開が済んだら、それまで使っていたPowerShellまたはターミナルを閉じ、以下の手順でプロジェクトフォルダから開き直します。
+
+<a id="open-project-shell"></a>
+#### WindowsでPowerShellを開く
+
+1. エクスプローラーでプロジェクトフォルダを開きます。
+2. 上部のアドレスバーに `powershell` と入力してEnterを押します。
+3. 開いたPowerShellで `dir` を実行し、`archaeo_scatter.py` と `requirements.txt` が表示されることを確認します。
+
+#### macOSでターミナルを開く
+
+1. Finderでプロジェクトフォルダを開き、**表示 → パスバーを表示** を選びます。下部にパスバーがあればそのまま進みます。
+2. パスバー右端のプロジェクトフォルダ名をControlキーを押しながらクリックし、**サービス → フォルダに新規ターミナル** を選びます。
+3. 開いたターミナルで `ls` を実行し、`archaeo_scatter.py` と `requirements.txt` が表示されることを確認します。
+
+両ファイルが表示されなければ、PowerShellまたはターミナルを閉じ、両ファイルの見えるフォルダから開き直してください。[Appleのターミナル操作ガイド](https://support.apple.com/ja-jp/guide/terminal/trmlb20c7888/mac)
+
+### 3. 初期設定と起動
 
 #### Windows / PowerShell
 
-エクスプローラーでプロジェクトフォルダを開き、アドレスバーに `powershell` と入力してEnterを押します。仮想環境のPythonを直接指定して起動します。
+[手順2で開いたPowerShell](#open-project-shell)で、手順1で控えた記号に対応する**1行だけ**を実行して仮想環境 `venv` を作ります。
+
+| 記号 | 実行するコマンド |
+|---|---|
+| A | `py -3.13 -m venv venv` |
+| B | `python -m venv venv` |
+| C | `pymanager exec -V:3.13 -m venv venv` |
+
+続いて、バージョン確認、パッケージ導入、起動を行います。
 
 ```powershell
-dir
-py -3.13 -m venv venv
+.\venv\Scripts\python.exe --version
 .\venv\Scripts\python.exe -m pip install --upgrade pip
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\venv\Scripts\python.exe -m pip check
 .\venv\Scripts\python.exe archaeo_scatter.py
 ```
 
-手順1で `pymanager exec` を使った場合は、仮想環境の作成を `pymanager exec -V:3.13 -m venv venv` に置き換えます。
+#### macOS
 
-**2回目以降**は、同じプロジェクトフォルダで各OSの最後の起動コマンドだけを実行します。画面が自動で開かない場合は、ターミナルに表示された `http://127.0.0.1:...` をブラウザで開きます。終了はターミナルで **Ctrl+C** です。
-
-`ModuleNotFoundError` が出る場合は、仮想環境内のPythonを指定して `-m pip install -r requirements.txt` を再実行してください。図の日本語が四角で表示される場合は、Noto Sans CJK JPなどの日本語フォントを導入してください。
-
-<a id="sample-normal"></a>
-## サンプル1　正規性と確率楕円
-
-[pottery_demo.csv](examples/pottery_demo.csv) は、二変量正規モデルから生成した土器の模擬計測80点です。口径の大きい側で器高の散らばりが広く見え、裾の観測値も含む標本を選びました。生成モデルの条件付き分散は一定です。
-
-1. **土器デモを開く**を押します。起動時にも同じデータが表示されます。CSVから試す場合は **CSVを開く**で `examples/pottery_demo.csv` を指定します。
-2. Xを **口径 (cm)**、Yを **器高 (cm)** に設定します。CSVから開いた場合は、**CSVプレビュー・資料ID** で **資料ID** を選択します。
-3. 表示範囲を両軸とも **自動** にし、**X・Yの1単位を同じ長さで表示**をオンにします。手動軸を試す場合はXの範囲を20〜30 cmにして更新します。表示範囲外の点数が変わり、検定結果と包含数は全80点に対する値を維持します。
-4. 表示方法を **自動**、包含確率を **50%・95%** にして **散布図を更新** を押します。二変量正規性は5%水準で棄却されず（Henze–Zirkler、Monte Carlo 499回、p＝0.618）、楕円内にそれぞれ43点、75点が入ります。99%領域外のP019とP048も計算に含まれます。
-5. **PNGを保存**を押すと、現在描画している散布図が240 dpiで保存されます。確率は50%、66.7%（正確には2/3）、90%、95%から選択できます。
-
-初期プロトタイプのGUIイメージ
-
-![CSV、軸、確率楕円の設定と診断結果](docs/images/pottery_gui.png)
-
-50%・95%確率楕円の出力例
-
-![口径と器高の散布図、50%・95%楕円、裾の2点](docs/images/pottery_scatter.png)
-
-<a id="sample-mixture"></a>
-## サンプル2　元の分類、KDE、クラスターの再編成
-
-[archaeo_scatter_kde_demo.csv](examples/archaeo_scatter_kde_demo.csv) は、近接して裾が重なるA（35点）・B（34点）と、少し離れたC（11点）の計80点です。`生成群` 列には模擬データの元ラベルが入っています。
-
-### GUIで全体を見る
-
-1. **CSVを開く**で `examples/archaeo_scatter_kde_demo.csv` を選択します。Xを **口径 (cm)**、Yを **器高 (cm)** にし、必要に応じて資料ID列を指定します。
-2. **散布図を更新**を押します。全80点をまとめた正規性検定では p＝0.002 で、現在の自動モードは散布図を表示します。
-3. 群別描画、Bagplot、KDE、GMMの比較は、下記の再現コマンドで試せます。
-
-### 比較図を再現する
-
-初期設定と同じプロジェクトフォルダで実行します。出力先は `example-output/` です。最初の1行はサンプル再現用の追加パッケージを導入します。
-
-**macOS**
+[手順2で開いたターミナル](#open-project-shell)で実行します。
 
 ```bash
-./venv/bin/python -m pip install -r examples/requirements.txt
-./venv/bin/python -m examples.group_demo
-./venv/bin/python -m examples.kde_demo
-./venv/bin/python -m examples.gmm_demo
-./venv/bin/python -m examples.group_demo --refit
+python3.13 -m venv venv
+./venv/bin/python --version
+./venv/bin/python -m pip install --upgrade pip
+./venv/bin/python -m pip install -r requirements.txt
+./venv/bin/python -m pip check
+./venv/bin/python archaeo_scatter.py
 ```
+
+**2回目以降**も[プロジェクトフォルダから開き](#open-project-shell)、各OSの最後の起動コマンドだけを実行します。ブラウザが自動で開かなければ、PowerShellまたはターミナルに表示された `http://127.0.0.1:...` をブラウザで開いてください。終了はPowerShellまたはターミナルで **Ctrl+C** です。
+
+`ModuleNotFoundError` が出たら、上記の各OSの `-m pip install -r requirements.txt` の行を再実行してください。図の日本語が四角で表示される場合は、Noto Sans CJK JPなどの日本語フォントを導入してください。
+
+<a id="workflows"></a>
+## 実行手順と出力
+
+| データと目的 | 現在の操作方法 | 得られる出力 |
+|---|---|---|
+| 2変量の関係や広がりを見る | GUI | 散布図、正規性診断、確率楕円、散布図のPNG |
+| ラベル付きの2変量を元の群別に比較する | 付属デモコマンドで確認 | 元ラベル別の確率楕円・Bagplotの比較PNG |
+| ラベル付きの2変量から元の分類を再評価する | 付属デモコマンドで確認 | 密度等高線、GMMの成分比較・対応件数、再編成案の比較PNG |
+
+現行GUIは任意のCSVを読み込めます。群別表示と分類の再評価は、付属コマンドでサンプル2の結果を再現できます。任意のCSVに対する群別操作は[次版GUIの設計](#gui-design)を参照してください。
+
+<a id="sample-normal"></a>
+### 1. 2変量のシンプルなデータを描く
+
+**出力**　GUIに散布図、正規性の判定とQ–Qプロット、楕円内の観測点数を表示します。**PNGを保存**で、表示中の散布図を240 dpiのPNGとしてブラウザからダウンロードできます。
+
+1. **CSVを開く**でデータを読み込み、X軸・Y軸に使う数値列を選びます。資料番号がある場合は **CSVプレビュー・資料ID** で指定できます。
+2. 軸の表示範囲を自動または手動で設定します。両軸の単位が同じ場合は **X・Yの1単位を同じ長さで表示** を選べます。手動の範囲指定は表示に適用されます。
+3. 表示方法を **自動** にして **散布図を更新** を押します。二変量正規性を棄却しない場合に確率楕円が表示されます。50%・66.7%（2/3）・90%・95%から水準を選べます。散布図を確認して **PNGを保存** を押します。
+
+#### デモ　サンプル1で口径と器高を描く
+
+**土器デモを開く**、または **CSVを開く** から [pottery_demo.csv](examples/pottery_demo.csv) を選びます。Xを **口径 (cm)**、Yを **器高 (cm)**、資料IDを **資料ID** に設定し、両軸を自動範囲・等縮尺にします。表示方法を **自動**、水準を **50%・95%** にして更新します。
+
+有効80点で正規性を棄却せず（Henze–Zirkler、p＝0.618）、50%楕円内に43点、95%楕円内に75点が入ります。99%領域外のP019・P048も計算対象です。Xの表示範囲を手動で20〜30 cmに変えると表示される点は変わりますが、診断と楕円内の集計は全80点で行います。
+
+![散布図、軸設定、正規性診断を表示した初期GUIのイメージ](docs/images/pottery_gui.png)
+
+![PNGの出力例。口径と器高の散布図、50%・95%楕円、裾の2点](docs/images/pottery_scatter.png)
+
+<a id="sample-mixture"></a>
+### 2. ラベル付きの2変量データを群別に見る
+
+**出力**　元のラベルで色分けした散布図に、各群の確率楕円とBagplotを重ねた比較PNGです。群ごとの位置・広がり・重なりと、群内の外れ値候補を確認できます。
+
+1. X・Yに使う数値列と、群を示すラベル列を確認します。元の分類を確認する段階では、そのラベルで点を分けます。
+2. 元ラベル別の分布を同じ軸・縮尺で比較します。初めに全点を表示して群間の重なりを見たうえで、各群の楕円とBagplotを照合します。
+
+#### デモ　サンプル2の元のA・B・Cを比較する
+
+[archaeo_scatter_kde_demo.csv](examples/archaeo_scatter_kde_demo.csv) は、口径・器高と `生成群` を持つ80点です。A（35点）とB（34点）の裾が重なり、C（11点）は少し離れています。GUIで読み込むと、全80点の散布図と正規性診断（p＝0.002）を確認できます。
+
+群別の比較図は、[プロジェクトフォルダから開き直したPowerShellまたはターミナル](#open-project-shell)で次を実行します。1行目の追加パッケージ導入は初回だけです。
 
 **Windows / PowerShell**
 
 ```powershell
 .\venv\Scripts\python.exe -m pip install -r examples/requirements.txt
 .\venv\Scripts\python.exe -m examples.group_demo
+```
+
+**macOS**
+
+```bash
+./venv/bin/python -m pip install -r examples/requirements.txt
+./venv/bin/python -m examples.group_demo
+```
+
+`example-output/archaeo_scatter_group_demo.png` を開きます。左の楕円と右のBagplotで、A・Bの重なりやCのまとまりを見比べられます。
+
+![元のA・B・C別の確率楕円とBagplot](docs/images/archaeo_scatter_group_demo.png)
+
+<a id="review-labels"></a>
+### 3. ラベル付きの2変量データの分類を再評価する
+
+**出力**　全体の密度等高線、GMMの2・3・4成分の比較図と元群から推定成分への対応件数、3成分で再編成した場合の群別の確率楕円・Bagplotです。最後の図は、変更候補を資料IDと移動方向で示します。
+
+1. **密度の集中を見る。** X・Yの全点からKDEを求め、元の分類に照らして集中域と群の重なりを確認します。
+2. **候補を比較する。** X・Yで推定したGMMの成分を元ラベルと照合します。BICと対応件数を見て、統合や分割の候補を比較します。
+3. **再編成案を点検する。** 候補の分類で確率楕円とBagplotを再計算し、変更点を資料IDで確認します。分類の採否は、器形・文様・出土状況などの資料情報も合わせて判断します。
+
+#### デモ　サンプル2を3成分の再編成案と比較する
+
+[手順2](#sample-mixture)で追加パッケージを導入した後、同じプロジェクトフォルダで実行します。コマンドは順に、密度等高線、成分比較、再編成案の図を `example-output/` に作ります。
+
+**Windows / PowerShell**
+
+```powershell
 .\venv\Scripts\python.exe -m examples.kde_demo
 .\venv\Scripts\python.exe -m examples.gmm_demo
 .\venv\Scripts\python.exe -m examples.group_demo --refit
 ```
 
-1. **元の分類を確認する。** `group_demo` は生成群を使い、同じ縮尺で群別の確率楕円とBagplotを比較します。Bagplotの外れ値候補は各群内での位置から求めます。
+**macOS**
 
-   ![元のA・B・C別の確率楕円とBagplot](docs/images/archaeo_scatter_group_demo.png)
+```bash
+./venv/bin/python -m examples.kde_demo
+./venv/bin/python -m examples.gmm_demo
+./venv/bin/python -m examples.group_demo --refit
+```
 
-2. **分布のピークを見る。** `kde_demo` は群ラベルを使わずに全80点の密度等高線を描きます。図はScottの帯域幅で3つのピークを示します。帯域幅を1.25倍にした計算ではA・B側のピークが一つにまとまります。
+1. **`archaeo_scatter_kde_demo.png`** を開きます。Scottの帯域幅では3つのピークが見え、1.25倍ではA・Bのピークが一つにまとまります。
 
-   ![近接して一部重なるA・Bと右上の小群CのKDE](docs/images/archaeo_scatter_kde_demo.png)
+   ![A・Bの重なりと右上の小群Cを示すKDE](docs/images/archaeo_scatter_kde_demo.png)
 
-3. **2・3・4成分を比較する。** `gmm_demo` はX・Yで推定した所属領域と、元ラベルから推定成分への対応を描きます。2成分ではA＋BとC、3成分では元の3群と75／80点が一致します。図の2・3成分には成分別共分散、4成分には共通共分散を使います。成分数の違いを評価するときは、コマンド出力のBICを同じ共分散設定内で比較してください。
+2. **`archaeo_scatter_gmm_comparison.png`** を開きます。2成分ではA＋BとC、3成分では元の3群と75／80点が一致します。図では2・3成分に成分別共分散、4成分に共通共分散を使用しています。成分数の違いは、コマンド出力のBICを同じ共分散設定内で比較してください。
 
-   ![2・3・4成分の散布図と元ラベルからの割り当て件数](docs/images/archaeo_scatter_gmm_comparison.png)
+   ![2・3・4成分の散布図と元ラベルからの対応件数](docs/images/archaeo_scatter_gmm_comparison.png)
 
-4. **再編成案を確認する。** `group_demo --refit` は3成分GMMの推定群（A＝32、B＝37、C＝11点）で楕円とBagplotを再計算します。移動した5点を赤紫のひし形で示します。A→Bは K029、K038、K048、K075、B→Aは K036 です。
+3. **`archaeo_scatter_gmm3_reclustered.png`** を開きます。推定群はA＝32、B＝37、C＝11点です。赤紫のひし形は変更候補5点で、A→BがK029・K038・K048・K075、B→AがK036です。入力CSVの元ラベルは保持されます。
 
-   ![再編成後の確率楕円とBagplot。移動した5点を資料IDと方向で表示](docs/images/archaeo_scatter_gmm3_reclustered.png)
+   ![再編成案の確率楕円とBagplot。変更候補を資料IDと方向で表示](docs/images/archaeo_scatter_gmm3_reclustered.png)
 
 <a id="gui-design"></a>
 ## GUI設計
