@@ -196,6 +196,24 @@ def density_overlay(ax, points, bandwidth, color=None):
                linewidths=.9, zorder=2)
 
 
+def compare(request):
+    from comparison import render_comparison
+    raw = base64.b64decode(request["csv"], validate=True)
+    x, y, identifier = (int(request[key]) for key in ("x", "y", "id"))
+    headers, rows, points, ids, _, values, *_ = diagnostics(raw, x, y, identifier)
+    if len(points) < 5 or values is None:
+        raise ValueError("比較には二次元に広がる有効点が5点以上必要です。")
+    covariance = request.get("covariance", "full")
+    if covariance not in {"full", "tied"}:
+        raise ValueError("共分散の設定を確認してください。")
+    for key in ("x", "y"):
+        if request[key+"mode"] == "manual":
+            validated_limits(request[key+"min"], request[key+"max"])
+    candidates = fit_mixtures(raw, x, y, covariance)
+    fig, results = render_comparison(request, headers, rows, points, ids, candidates)
+    return {"plot": png(fig, 180 if request.get("download") else 115), "results": results}
+
+
 def analyse(request):
     raw = base64.b64decode(request["csv"], validate=True)
     x_col, y_col, id_col = (int(request[key]) for key in ("x", "y", "id"))
@@ -452,6 +470,17 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <option value="4">4</option><option value="5">5</option><option value="6">6</option>
 </select></label>
 </div>
+<div id="comparison-controls" hidden>
+<label class="field">元の分類ラベル<select id="label"></select></label>
+<p>並べて比較する成分数</p><div class="options">
+<label><input type="checkbox" name="compare-k" value="2" checked>2</label>
+<label><input type="checkbox" name="compare-k" value="3" checked>3</label>
+<label><input type="checkbox" name="compare-k" value="4" checked>4</label>
+<label><input type="checkbox" name="compare-k" value="5">5</label>
+<label><input type="checkbox" name="compare-k" value="6">6</label>
+</div><button id="compare-models" type="button">比較図を作成</button>
+<small>選択中の共分散設定を全ての成分数に適用します。</small>
+</div>
 <div id="component-fields" hidden>
 <h2>選択したGMMの成分別描画</h2>
 <label class="field">描画方法<select id="component-view">
@@ -494,16 +523,22 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <small>成分数を押すと図が切り替わります。BICは同じ共分散設定で比較してください。</small></section>
 <p id="analysis-warning" role="status"></p>
 </div></div>
+<section id="comparison-panel" class="panel" hidden>
+<div class="row"><h2>成分数と元ラベルの比較</h2><button id="save-comparison" type="button">比較PNGを保存</button></div>
+<img id="comparison-plot" alt="複数の成分数の散布図と元ラベル対応表">
+<div id="comparison-details"></div>
+</section>
 </div>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 const methods = [...document.querySelectorAll('[data-method]')];
 const titles = {scatter:'散布図', kde:'密度等高線（KDE）', gmm:'成分数の比較（GMM）'};
-let current = null, last = null, busy = false, stopped = false, mode = 'scatter';
+let current = null, last = null, comparisonLast = null, busy = false, stopped = false, mode = 'scatter';
 
 function showMode(next) {
   mode = next;
+  $('comparison-controls').hidden = mode !== 'gmm';
   $('component-fields').hidden = mode !== 'gmm' || !last || last.mode !== 'gmm';
   for (const button of methods) {
     const method = button.dataset.method;
@@ -515,6 +550,8 @@ function state(text) { $('status').textContent = text; }
 function setBusy(value) {
   busy = value;
   $('shutdown').disabled = value || stopped;
+  $('compare-models').disabled = value || !current;
+  $('save-comparison').disabled = value || !comparisonLast;
   $('file').disabled = value;
   $('update').disabled = value || !current;
   $('save').disabled = value || !last;
@@ -541,6 +578,8 @@ function table(target, headers, rows) {
 }
 function install(info, name) {
   current = info;
+  comparisonLast = null;
+  $('comparison-panel').hidden = true;
   last = null;
   $('mixture-panel').hidden = $('ellipse-panel').hidden = true;
   $('analysis-warning').textContent = '';
@@ -552,15 +591,16 @@ function install(info, name) {
   $('stats').hidden = true;
   for (const id of ['decision','hz','test-note','cover','tail-count']) $(id).replaceChildren();
   $('name').textContent = name + ' / ' + info.total + '行';
-  for (const axis of ['x','y','id']) {
+  for (const axis of ['x','y','id','label']) {
     const select = $(axis);
     select.replaceChildren();
-    if (axis === 'id') select.add(new Option('指定なし', -1));
+    if (axis === 'id' || axis === 'label') select.add(new Option('指定なし', -1));
     info.headers.forEach((header, index) => select.add(new Option(header,index)));
   }
   $('x').value = info.suggested[0];
   $('y').value = info.suggested[1];
   $('id').value = -1;
+  $('label').value = -1;
   for (const axis of ['x','y']) {
     $(axis+'label').value = info.headers[$(axis).value];
     $(axis+'mode').value = 'auto';
@@ -682,6 +722,35 @@ for (const button of methods) {
     catch (err) { showMode(previous); throw err; }
   });
 }
+$('compare-models').onclick = () => action(async () => {
+  await plot();
+  const options = {...last, label:$('label').value,
+    compare_counts:[...document.querySelectorAll('[name=compare-k]:checked')].map(el=>Number(el.value))};
+  const data = await call('/compare', options);
+  $('comparison-plot').src = 'data:image/png;base64,'+data.plot;
+  $('comparison-panel').hidden = false;
+  const details = $('comparison-details');
+  details.replaceChildren();
+  for (const result of data.results) {
+    const heading = document.createElement('p');
+    heading.textContent = result.k+'成分：照合との差異 '+result.different.length+'点 / ラベル未設定 '+result.unlabeled+'点';
+    details.append(heading);
+    if (result.different.length) {
+      const t=document.createElement('table');
+      table(t,['資料ID','元ラベル','推定成分','照合ラベル','所属確率'],
+        result.different.map(row=>[row.id,row.from,row.component,row.matched_label || '対応なし',row.probability.toFixed(3)]));
+      details.append(t);
+    }
+  }
+  comparisonLast = options;
+});
+$('save-comparison').onclick = () => action(async () => {
+  const data = await call('/compare', {...comparisonLast, download:true});
+  const link=document.createElement('a');
+  link.href='data:image/png;base64,'+data.plot;
+  link.download='archaeo_scatter_gmm_comparison.png';
+  link.click();
+});
 $('component-view').onchange = () => action(async () => {
   if (mode === 'gmm' && current) await plot();
 });
@@ -747,6 +816,8 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
             elif self.path == "/inspect":
                 self.reply(inspect(base64.b64decode(payload["csv"], validate=True)))
+            elif self.path == "/compare":
+                self.reply(compare(payload))
             elif self.path == "/analyse":
                 self.reply(analyse(payload))
             else:
