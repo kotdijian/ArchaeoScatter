@@ -180,7 +180,7 @@ def fit_mixtures(raw, x_col, y_col, covariance):
     return candidates
 
 
-def density_overlay(ax, points, bandwidth):
+def density_overlay(ax, points, bandwidth, color=None):
     kernel = gaussian_kde(points.T, bw_method="scott")
     kernel.set_bandwidth(kernel.factor * bandwidth)
     lower, upper = points.min(axis=0), points.max(axis=0)
@@ -189,9 +189,10 @@ def density_overlay(ax, points, bandwidth):
     xx, yy = np.meshgrid(x, y)
     density = kernel(np.vstack((xx.ravel(), yy.ravel()))).reshape(xx.shape)
     levels = density.max() * np.array([.1, .25, .4, .55, .7, .85, 1.01])
-    ax.contourf(xx, yy, density, levels=levels, cmap="BuGn", alpha=.48, zorder=1)
-    ax.contour(xx, yy, density, levels=levels[:-1], colors="#32756e",
-               linewidths=.8, zorder=2)
+    if color is None:
+        ax.contourf(xx, yy, density, levels=levels, cmap="BuGn", alpha=.48, zorder=1)
+    ax.contour(xx, yy, density, levels=levels[:-1], colors=color or "#32756e",
+               linewidths=.9, zorder=2)
 
 
 def analyse(request):
@@ -208,6 +209,10 @@ def analyse(request):
     mode = request.get("mode", "scatter")
     if mode not in {"scatter", "kde", "gmm"}:
         raise ValueError("分析方法を確認してください。")
+    component_view = request.get("component_view", "points") if mode == "gmm" else "points"
+    if component_view not in {"points", "ellipse", "kde"}:
+        raise ValueError("成分別の描画方法を確認してください。")
+    component_notes = []
     warning = ""
     comparison = []
     assignments = None
@@ -310,6 +315,45 @@ def analyse(request):
     if tail_count and request["tail"] and np.any(tail):
         handles.append(Line2D([], [], linestyle="none", marker="o", markerfacecolor="none",
                               markeredgecolor="#ae562c", label="99%領域の外側"))
+    if mode == "scatter" and p is not None and p < .05 and not draw:
+        rejection = "正規性が棄却されたため確率楕円を描画しません"
+        fig.text(.5, .005, rejection, ha="center", va="bottom", color="#bf202b",
+                 fontsize=9, bbox={"facecolor":"white", "edgecolor":"none", "pad":2})
+    else:
+        rejection = ""
+    if assignments is not None and component_view != "points":
+        theta = np.linspace(0, 2*np.pi, 361)
+        circle = np.array([np.cos(theta), np.sin(theta)])
+        for i, model_index in enumerate(order):
+            if component_view == "ellipse":
+                covariance_matrix = (model.covariances_[model_index]
+                                     if covariance == "full" else model.covariances_)
+                eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+                for level in LEVELS:
+                    if level in request.get("component_levels", ["50", "95"]):
+                        cutoff = -2*np.log1p(-LEVELS[level])
+                        outline = (model.means_[model_index, :, None]
+                                   + eigenvectors @ (np.sqrt(cutoff*eigenvalues)[:, None]*circle))
+                        ax.plot(*outline, color=palette[i], linewidth=1.5,
+                                linestyle="-" if level == "50" else "--", zorder=2)
+            else:
+                group = points[assignments == i]
+                if len(group) < 5 or np.linalg.matrix_rank(group-group.mean(axis=0)) < 2:
+                    component_notes.append(f"成分{i+1}は件数不足または二次元に広がらないためKDEを描画できません。")
+                    continue
+                factor = float(request.get("component_bandwidth", 1))
+                if not .25 <= factor <= 3:
+                    raise ValueError("成分別の帯域幅は0.25〜3倍で指定してください。")
+                try:
+                    density_overlay(ax, group, factor, palette[i])
+                except np.linalg.LinAlgError:
+                    component_notes.append(f"成分{i+1}の密度を推定できません。")
+        if component_view == "ellipse":
+            for level in LEVELS:
+                if level in request.get("component_levels", ["50", "95"]):
+                    handles.append(Line2D([], [], color="#44545e",
+                                          linestyle="-" if level == "50" else "--",
+                                          label=f"モデル上{level}%"))
     if handles:
         ax.legend(handles=handles, loc="upper left", fontsize=8, framealpha=.96,
                   edgecolor="#e1e9ea")
@@ -334,7 +378,8 @@ def analyse(request):
             "p": p, "hz": hz, "n_test": n_test, "reason": reason, "summaries": summaries,
             "clipped": outside_view, "tail": tail_count, "draw": draw,
             "mode": mode, "warning": warning, "comparison": comparison,
-            "selected": selected, "best": best, "counts": counts}
+            "selected": selected, "best": best, "counts": counts,
+            "rejection": rejection, "component_notes": component_notes}
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -406,6 +451,18 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <option value="4">4</option><option value="5">5</option><option value="6">6</option>
 </select></label>
 </div>
+<div id="component-fields" hidden>
+<h2>選択したGMMの成分別描画</h2>
+<label class="field">描画方法<select id="component-view">
+<option value="points">点のみ</option><option value="ellipse">成分別の確率楕円</option>
+<option value="kde">成分別のKDE</option></select></label>
+<div class="options">
+<label><input type="checkbox" name="component-level" value="50" checked>50%</label>
+<label><input type="checkbox" name="component-level" value="95" checked>95%</label>
+</div>
+<label class="field">成分別KDEの帯域幅<input id="component-bandwidth" type="number" min="0.25" max="3" step="0.05" value="1"></label>
+<small>楕円は選択したGMMの平均・共分散から計算します。KDEは最大所属確率で割り当てた点から成分別に計算します。</small>
+</div>
 <div id="scatter-fields">
 <label class="field">表示方法<select id="ellipse"><option value="auto">自動（正規性を棄却しない場合）</option><option value="always">常に表示（参考）</option><option value="off">非表示</option></select></label>
 <div class="options" aria-label="モデル上の包含確率">
@@ -427,7 +484,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 </div>
 <div class="stats" id="stats" hidden><span class="metric">有効<b id="valid"></b></span><span class="metric">除外<b id="excluded"></b></span><span class="metric">表示範囲外<b id="clipped"></b></span></div>
 <div class="results">
-<section class="panel plotPanel"><div class="row"><h2 id="plot-title">散布図</h2><button id="save" disabled>PNGを保存</button></div><img id="plot" alt="選択した分析方法の結果"></section>
+<section class="panel plotPanel"><div class="row"><h2 id="plot-title">散布図</h2><button id="save" disabled>PNGを保存</button></div><p id="rejection" role="status" style="color:#bf202b;font-weight:bold" hidden></p><img id="plot" alt="選択した分析方法の結果"></section>
 <div class="diagnostics">
 <section class="panel"><h2>二変量正規性</h2><p id="decision" class="diagnosis"></p><p id="hz"></p><small id="test-note"></small><img id="qq" alt="マハラノビス距離の二乗と理論カイ二乗分位点の比較"><small id="qq-note" hidden>点が破線に沿うほど、観測距離の分布が理論分布に近くなります。</small></section>
 <section class="panel" id="ellipse-panel" hidden><h2>楕円内の観測点</h2><div id="cover"></div><p><small id="tail-count"></small></p></section>
@@ -446,6 +503,7 @@ let current = null, last = null, busy = false, mode = 'scatter';
 
 function showMode(next) {
   mode = next;
+  $('component-fields').hidden = mode !== 'gmm' || !last || last.mode !== 'gmm';
   for (const button of methods) {
     const method = button.dataset.method;
     button.setAttribute('aria-pressed', method === mode);
@@ -483,6 +541,8 @@ function install(info, name) {
   last = null;
   $('mixture-panel').hidden = $('ellipse-panel').hidden = true;
   $('analysis-warning').textContent = '';
+  $('rejection').hidden = $('component-fields').hidden = true;
+  $('component-view').value = 'points';
   $('plot').removeAttribute('src');
   $('qq').removeAttribute('src');
   $('qq-note').hidden = true;
@@ -509,10 +569,16 @@ function install(info, name) {
 }
 async function plot() {
   const options = {csv:current.csv, mode};
+  options.component_view = $('component-view').value;
+  options.component_bandwidth = $('component-bandwidth').value;
+  options.component_levels = [...document.querySelectorAll('[name=component-level]:checked')].map(el=>el.value);
   for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse','bandwidth','covariance','components']) options[key] = $(key).value;
   for (const key of ['equal','tail']) options[key] = $(key).checked;
   options.levels = [...document.querySelectorAll('[name=level]:checked')].map(el=>el.value);
   const data = await call('/analyse', options);
+  $('rejection').textContent = data.rejection;
+  $('rejection').hidden = !data.rejection;
+  $('component-fields').hidden = data.mode !== 'gmm' || !data.counts.length;
   $('plot-title').textContent = titles[data.mode];
   $('plot').src = 'data:image/png;base64,'+data.plot;
   if (data.qq) $('qq').src = 'data:image/png;base64,'+data.qq;
@@ -527,7 +593,7 @@ async function plot() {
   $('test-note').textContent = data.p === null ? '' : '有意水準 5% ・ Monte Carlo 499回'+(data.n_test < data.n ? ' ・ 検定は無作為抽出した '+data.n_test+'点' : '');
   $('ellipse-panel').hidden = data.mode !== 'scatter';
   $('mixture-panel').hidden = data.mode !== 'gmm' || !data.comparison.length;
-  $('analysis-warning').textContent = data.warning;
+  $('analysis-warning').textContent = [data.warning, ...data.component_notes].filter(Boolean).join(' ');
   $('mixture-summary').textContent = data.selected && data.counts.length
     ? '表示中：'+data.selected+'成分（'+data.counts.join(' / ')+'点）'
     : '';
@@ -597,6 +663,9 @@ for (const button of methods) {
     catch (err) { showMode(previous); throw err; }
   });
 }
+$('component-view').onchange = () => action(async () => {
+  if (mode === 'gmm' && current) await plot();
+});
 $('update').onclick = () => action(async () => {
   if (!current) throw new Error('CSVを選択してください。');
   state('計算・描画中…');
