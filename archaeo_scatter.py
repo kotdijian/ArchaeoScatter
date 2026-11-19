@@ -277,6 +277,17 @@ def analyse(request):
     summaries = []
     handles = []
     counts = []
+    label_counts = []
+    label_col = int(request.get("label", -1))
+    if not -1 <= label_col < len(headers):
+        raise ValueError("ラベル列を確認してください。")
+    source_labels = []
+    if label_col >= 0:
+        for row in rows:
+            if np.isfinite([number(row, x_col), number(row, y_col)]).all():
+                source_labels.append(row[label_col].strip() if label_col < len(row) else "")
+        if len(set(source_labels)) > 30:
+            raise ValueError("ラベルは30種類まで表示できます。資料ID列を選んでいないか確認してください。")
     if bandwidth is not None:
         try:
             density_overlay(ax, points, bandwidth)
@@ -284,7 +295,20 @@ def analyse(request):
             warning = "密度を推定できません。散布図を表示します。"
     if n:
         all_x, all_y = points.T
-        if assignments is None:
+        if assignments is None and source_labels:
+            group_colors = ("#226994", "#ac4c27", "#715197", "#287963", "#8c6a24", "#974267")
+            markers = ("o", "^", "s", "D", "v")
+            observed_labels = list(dict.fromkeys(source_labels))
+            label_array = np.array(source_labels)
+            for index, name in enumerate(observed_labels):
+                selected_points = points[label_array == name]
+                label_counts.append({"label": name, "count": len(selected_points)})
+                handles.append(ax.scatter(
+                    *selected_points.T, s=30, c=group_colors[index % len(group_colors)],
+                    marker=markers[index % len(markers)],
+                    edgecolors="white", linewidths=.42, zorder=3,
+                    label=f"{name or 'ラベル未設定'}（{len(selected_points)}点）"))
+        elif assignments is None:
             ax.scatter(all_x, all_y, s=26, c="#294d66", edgecolors="white",
                        linewidths=.42, alpha=.77, zorder=3)
         else:
@@ -398,7 +422,7 @@ def analyse(request):
             "clipped": outside_view, "tail": tail_count, "draw": draw,
             "mode": mode, "warning": warning, "comparison": comparison,
             "selected": selected, "best": best, "counts": counts,
-            "rejection": rejection, "component_notes": component_notes}
+            "rejection": rejection, "component_notes": component_notes, "label_counts": label_counts}
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -445,6 +469,8 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <section class="panel"><h2><span class="step">1.</span>データを選ぶ</h2>
 <div class="buttons"><input type="file" id="file" accept=".csv,text/csv"><label class="fileButton" for="file">CSVを開く</label></div>
 <p id="name" class="muted">CSVを選択してください。</p>
+<label class="field">元の分類ラベル<select id="label"></select></label>
+<small>散布図では元の分類を色・点形で表示します。</small>
 <div class="row"><label class="field">Xの列<select id="x"></select></label><label class="field">Yの列<select id="y"></select></label></div>
 <details><summary>CSVプレビュー・資料ID</summary>
 <label class="field">資料IDの列<select id="id"></select></label><div class="scroll"><table id="preview"></table></div></details>
@@ -471,7 +497,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 </select></label>
 </div>
 <div id="comparison-controls" hidden>
-<label class="field">元の分類ラベル<select id="label"></select></label>
+
 <p>並べて比較する成分数</p><div class="options">
 <label><input type="checkbox" name="compare-k" value="2" checked>2</label>
 <label><input type="checkbox" name="compare-k" value="3" checked>3</label>
@@ -611,7 +637,7 @@ function install(info, name) {
   table($('preview'), info.headers.slice(0,20), info.preview.map(row => row.slice(0,20)));
 }
 async function plot() {
-  const options = {csv:current.csv, mode};
+  const options = {csv:current.csv, mode, label:$('label').value};
   options.component_view = $('component-view').value;
   options.component_bandwidth = $('component-bandwidth').value;
   options.component_levels = [...document.querySelectorAll('[name=component-level]:checked')].map(el=>el.value);
