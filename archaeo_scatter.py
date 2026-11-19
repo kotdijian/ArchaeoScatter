@@ -6,6 +6,7 @@ from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import BytesIO, StringIO
 import json
+import secrets
 from pathlib import Path
 import threading
 import webbrowser
@@ -421,7 +422,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 @media(max-width:740px){main{display:block;padding:12px}header{padding:16px}h1{font-size:21px}.diagnostics{display:block}.diagnostics .panel{margin-bottom:12px}}
 </style></head>
 <body>
-<header><div><h1>archaeo_scatter</h1><p>CSVから、散布図・正規性診断・確率楕円を作成</p></div></header>
+<header><div><h1>archaeo_scatter</h1><p>CSVから、散布図・正規性診断・確率楕円を作成</p><button id="shutdown" type="button" style="margin-top:12px">アプリを終了</button><p id="shutdown-status" role="status" aria-live="polite"></p></div></header>
 <main><aside>
 <section class="panel"><h2><span class="step">1.</span>データを選ぶ</h2>
 <div class="buttons"><input type="file" id="file" accept=".csv,text/csv"><label class="fileButton" for="file">CSVを開く</label></div>
@@ -499,7 +500,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 const $ = id => document.getElementById(id);
 const methods = [...document.querySelectorAll('[data-method]')];
 const titles = {scatter:'散布図', kde:'密度等高線（KDE）', gmm:'成分数の比較（GMM）'};
-let current = null, last = null, busy = false, mode = 'scatter';
+let current = null, last = null, busy = false, stopped = false, mode = 'scatter';
 
 function showMode(next) {
   mode = next;
@@ -513,12 +514,14 @@ function showMode(next) {
 function state(text) { $('status').textContent = text; }
 function setBusy(value) {
   busy = value;
+  $('shutdown').disabled = value || stopped;
   $('file').disabled = value;
   $('update').disabled = value || !current;
   $('save').disabled = value || !last;
   for (const button of methods) button.disabled = value || !current;
 }
 async function call(url, payload) {
+  if (stopped) throw new Error('アプリは終了しています。再起動してください。');
   const response = await fetch(url, payload ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)} : {});
   const data = await response.json();
   if (!response.ok) throw new Error(data.error);
@@ -634,6 +637,22 @@ async function action(fn) {
   try { await fn(); } catch (err) { error(err); }
   finally { setBusy(false); }
 }
+$('shutdown').onclick = async () => {
+  if (busy || stopped) return;
+  if (!window.confirm('Pythonサーバーを停止します。必要な図は先にPNGで保存してください。終了しますか？')) return;
+  setBusy(true);
+  $('shutdown-status').textContent = '終了しています…';
+  try {
+    await call('/shutdown', {token:'__SHUTDOWN_TOKEN__'});
+    stopped = true;
+    $('shutdown-status').textContent = 'アプリを終了しました。このタブを閉じてください。';
+    for (const input of document.querySelectorAll('button, input, select')) input.disabled = true;
+    state('Pythonサーバーは停止しました。');
+  } catch (err) {
+    $('shutdown-status').textContent = '終了できませんでした。もう一度試すか、PowerShell・ターミナルでCtrl+Cを押してください。';
+    setBusy(false);
+  }
+};
 $('file').onchange = () => action(async () => {
   const file = $('file').files[0];
   if (!file) return;
@@ -705,7 +724,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/":
-            self.reply(PAGE, html=True)
+            self.reply(PAGE.replace("__SHUTDOWN_TOKEN__", self.server.shutdown_token), html=True)
         else:
             self.reply({"error": "ページが見つかりません。"}, 404)
 
@@ -718,7 +737,15 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < size <= 15*1024*1024:
                 raise ValueError("10 MB以下のCSVを選んでください。")
             payload = json.loads(self.rfile.read(size))
-            if self.path == "/inspect":
+            if self.path == "/shutdown":
+                token = payload.get("token")
+                if not isinstance(token, str) or not secrets.compare_digest(token, self.server.shutdown_token):
+                    self.reply({"error": "終了操作を確認できません。"}, 403)
+                    return
+                self.reply({"stopped": True})
+                # shutdown() must run outside the serve_forever thread.
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+            elif self.path == "/inspect":
                 self.reply(inspect(base64.b64decode(payload["csv"], validate=True)))
             elif self.path == "/analyse":
                 self.reply(analyse(payload))
@@ -740,14 +767,16 @@ def main():
         args.write_demo.write_text(demo_csv(), encoding="utf-8-sig")
         return
     with HTTPServer(("127.0.0.1", args.port), Handler) as server:
+        server.shutdown_token = secrets.token_hex(32)
         url = f"http://127.0.0.1:{server.server_port}/"
-        print(f"Open {url}  |  Stop: Ctrl+C", flush=True)
+        print(f"Open {url}  |  Stop: GUI button or Ctrl+C", flush=True)
         if not args.no_browser:
             threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        print("archaeo_scatter stopped.", flush=True)
 
 
 if __name__ == "__main__":

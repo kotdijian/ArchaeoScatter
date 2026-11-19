@@ -99,7 +99,7 @@ python3.13 -m venv venv
 ./venv/bin/python archaeo_scatter.py
 ```
 
-**2回目以降**も[プロジェクトフォルダから開き](#open-project-shell)、各OSの最後の起動コマンドだけを実行します。ブラウザが自動で開かなければ、PowerShellまたはターミナルに表示された `http://127.0.0.1:...` をブラウザで開いてください。終了はPowerShellまたはターミナルで **Ctrl+C** です。
+**2回目以降**も[プロジェクトフォルダから開き](#open-project-shell)、各OSの最後の起動コマンドだけを実行します。ブラウザが自動で開かなければ、PowerShellまたはターミナルに表示された `http://127.0.0.1:...` をブラウザで開いてください。終了するときは、画面上部の **アプリを終了** を押して確認します。「アプリを終了しました」と表示されたらPythonの実行が終了し、PowerShell・ターミナルは入力待ちに戻ります。その後ブラウザのタブを閉じてください。必要な図は終了前に **PNGを保存** で保存します。ブラウザのタブやウインドウだけを閉じた場合はPythonは動き続けるため、PowerShell・ターミナルで **Ctrl+C** を押して終了できます。
 
 `ModuleNotFoundError` が出たら、上記の各OSの `-m pip install -r requirements.txt` の行を再実行してください。図の日本語が四角で表示される場合は、Noto Sans CJK JPなどの日本語フォントを導入してください。
 
