@@ -2,6 +2,7 @@
 import numpy as np
 from matplotlib.figure import Figure
 from scipy.optimize import linear_sum_assignment
+from plot_axes import apply_axes
 
 PALETTE = ("#226994", "#ac4c27", "#715197", "#287963", "#8c6a24", "#974267")
 
@@ -68,8 +69,7 @@ def render_comparison(request, headers, rows, points, ids, candidates):
         ax.scatter(*model.means_[order].T,marker="x",c="#172f3a",s=45,zorder=5)
         ax.set(xlim=limits[0],ylim=limits[1],
                xlabel=request["xlabel"] or headers[x],ylabel=request["ylabel"] or headers[y])
-        if request.get("equal"):
-            ax.set_aspect("equal", adjustable="box")
+        apply_axes([ax], request, limits)
         ax.set_title(f"{k}成分  BIC={bic:.1f}")
         ax.grid(alpha=.2)
         ax.legend(fontsize=8,loc="best")

@@ -19,6 +19,7 @@ from matplotlib.lines import Line2D
 import numpy as np
 from scipy.spatial.distance import pdist
 from scipy.stats import chi2, gaussian_kde
+from plot_axes import apply_axes
 from sklearn.mixture import GaussianMixture
 
 LEVELS = {"50": .5, "66.7": 2/3, "90": .9, "95": .95}
@@ -403,9 +404,8 @@ def analyse(request):
     for key, setter in (("x", ax.set_xlim), ("y", ax.set_ylim)):
         if key in limits:
             setter(*limits[key])
-    if request["equal"]:
-        ax.set_aspect("equal", adjustable="box")
     ax.margins(.09)
+    tick_step = apply_axes([ax], request)
     if request.get("download"):
         return {"plot": png(fig, 240)}
     qq = None
@@ -422,7 +422,7 @@ def analyse(request):
             "clipped": outside_view, "tail": tail_count, "draw": draw,
             "mode": mode, "warning": warning, "comparison": comparison,
             "selected": selected, "best": best, "counts": counts,
-            "rejection": rejection, "component_notes": component_notes, "label_counts": label_counts}
+            "rejection": rejection, "component_notes": component_notes, "label_counts": label_counts, "tick_step": tick_step}
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -482,7 +482,11 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 <div class="axis"><div class="row"><label>Y軸の名前<input id="ylabel" type="text" maxlength="100"></label>
 <label>表示範囲<select id="ymode"><option value="auto">自動</option><option value="manual">手動</option></select></label></div>
 <div class="row bounds" id="ybounds" hidden><label>Y 最小値<input id="ymin" type="number" step="any"></label><label>Y 最大値<input id="ymax" type="number" step="any"></label></div></div>
-<label><input type="checkbox" id="equal">X・Yの1単位を同じ長さで表示</label>
+<p><small>X・Yの1単位の長さと目盛間隔を共通にします。</small></p>
+<label class="field">共通の目盛間隔<select id="tickmode"><option value="auto">自動</option><option value="manual">手動</option></select></label>
+<label class="field" id="tick-input" hidden>目盛間隔<input id="tickstep" type="number" min="0" step="any"></label>
+<button type="button" id="auto-axes">表示を自動調整</button>
+<p id="axis-summary" class="muted"></p>
 </section>
 <section class="panel"><h2><span class="step">3.</span>分析の設定</h2>
 <div id="kde-fields" hidden>
@@ -633,7 +637,9 @@ function install(info, name) {
     $(axis+'bounds').hidden = true;
     $(axis+'min').value = $(axis+'max').value = '';
   }
-  $('equal').checked = false;
+  $('tickmode').value = 'auto';
+  $('tick-input').hidden = true;
+  $('axis-summary').textContent = '';
   table($('preview'), info.headers.slice(0,20), info.preview.map(row => row.slice(0,20)));
 }
 async function plot() {
@@ -641,13 +647,14 @@ async function plot() {
   options.component_view = $('component-view').value;
   options.component_bandwidth = $('component-bandwidth').value;
   options.component_levels = [...document.querySelectorAll('[name=component-level]:checked')].map(el=>el.value);
-  for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse','bandwidth','covariance','components']) options[key] = $(key).value;
-  for (const key of ['equal','tail']) options[key] = $(key).checked;
+  for (const key of ['x','y','id','xlabel','ylabel','xmode','xmin','xmax','ymode','ymin','ymax','ellipse','tickmode','tickstep','bandwidth','covariance','components']) options[key] = $(key).value;
+  for (const key of ['tail']) options[key] = $(key).checked;
   options.levels = [...document.querySelectorAll('[name=level]:checked')].map(el=>el.value);
   const data = await call('/analyse', options);
   $('rejection').textContent = data.rejection;
   $('rejection').hidden = !data.rejection;
   $('component-fields').hidden = data.mode !== 'gmm' || !data.counts.length;
+  $('axis-summary').textContent = '共通の目盛間隔：'+data.tick_step;
   $('plot-title').textContent = titles[data.mode];
   $('plot').src = 'data:image/png;base64,'+data.plot;
   if (data.qq) $('qq').src = 'data:image/png;base64,'+data.qq;
@@ -739,6 +746,18 @@ for (const axis of ['x','y']) {
   $(axis).onchange = () => { $(axis+'label').value = current.headers[$(axis).value]; };
   $(axis+'mode').onchange = () => { $(axis+'bounds').hidden = $(axis+'mode').value !== 'manual'; };
 }
+$('tickmode').onchange = () => {
+  $('tick-input').hidden = $('tickmode').value !== 'manual';
+};
+$('auto-axes').onclick = () => action(async () => {
+  for (const key of ['x','y']) {
+    $(key+'mode').value = 'auto';
+    $(key+'bounds').hidden = true;
+  }
+  $('tickmode').value = 'auto';
+  $('tick-input').hidden = true;
+  if (current) await plot();
+});
 for (const button of methods) {
   button.onclick = () => action(async () => {
     const previous = mode;
