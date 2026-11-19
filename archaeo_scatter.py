@@ -289,6 +289,10 @@ def analyse(request):
                 source_labels.append(row[label_col].strip() if label_col < len(row) else "")
         if len(set(source_labels)) > 30:
             raise ValueError("ラベルは30種類まで表示できます。資料ID列を選んでいないか確認してください。")
+    original_points = bool(source_labels) and request.get("original_points", mode != "gmm")
+    palette = ("#226994", "#ac4c27", "#715197", "#287963", "#8c6a24", "#974267")
+    if assignments is not None:
+        counts = [int(np.count_nonzero(assignments == i)) for i in range(selected)]
     if bandwidth is not None:
         try:
             density_overlay(ax, points, bandwidth)
@@ -296,7 +300,7 @@ def analyse(request):
             warning = "密度を推定できません。散布図を表示します。"
     if n:
         all_x, all_y = points.T
-        if assignments is None and source_labels:
+        if original_points:
             group_colors = ("#226994", "#ac4c27", "#715197", "#287963", "#8c6a24", "#974267")
             markers = ("o", "^", "s", "D", "v")
             observed_labels = list(dict.fromkeys(source_labels))
@@ -308,7 +312,7 @@ def analyse(request):
                     *selected_points.T, s=30, c=group_colors[index % len(group_colors)],
                     marker=markers[index % len(markers)],
                     edgecolors="white", linewidths=.42, zorder=3,
-                    label=f"{name or 'ラベル未設定'}（{len(selected_points)}点）"))
+                    label=f"元ラベル {name or 'ラベル未設定'}（{len(selected_points)}点）"))
         elif assignments is None:
             ax.scatter(all_x, all_y, s=26, c="#294d66", edgecolors="white",
                        linewidths=.42, alpha=.77, zorder=3)
@@ -316,7 +320,6 @@ def analyse(request):
             palette = ("#226994", "#ac4c27", "#715197", "#287963", "#8c6a24", "#974267")
             for i in range(selected):
                 group = points[assignments == i]
-                counts.append(len(group))
                 handles.append(ax.scatter(*group.T, s=28, c=palette[i], edgecolors="white",
                                           linewidths=.42, zorder=3,
                                           label=f"成分 {i+1}（{len(group)}点）"))
@@ -356,6 +359,10 @@ def analyse(request):
             handles.append(Line2D([], [], color=color, label=f"モデル上 {level}%"))
             summaries.append({"level": level, "inside": int((d2 <= cutoff).sum()),
                               "scale": round(float(np.sqrt(cutoff)), 3)})
+    if original_points and assignments is not None and component_view != "points":
+        for i in range(selected):
+            handles.append(Line2D([], [], color=palette[i], linewidth=1.5,
+                                  label=f"GMM成分 {i+1}（{counts[i]}点）"))
     if tail_count and request["tail"] and np.any(tail):
         handles.append(Line2D([], [], linestyle="none", marker="o", markerfacecolor="none",
                               markeredgecolor="#ae562c", label="99%領域の外側"))
@@ -422,7 +429,7 @@ def analyse(request):
             "clipped": outside_view, "tail": tail_count, "draw": draw,
             "mode": mode, "warning": warning, "comparison": comparison,
             "selected": selected, "best": best, "counts": counts,
-            "rejection": rejection, "component_notes": component_notes, "label_counts": label_counts, "tick_step": tick_step}
+            "rejection": rejection, "component_notes": component_notes, "label_counts": label_counts, "tick_step": tick_step, "original_points": bool(original_points), "has_labels": bool(source_labels)}
 
 PAGE = r"""<!doctype html>
 <html lang="ja">
@@ -544,7 +551,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 </div>
 <div class="stats" id="stats" hidden><span class="metric">有効<b id="valid"></b></span><span class="metric">除外<b id="excluded"></b></span><span class="metric">表示範囲外<b id="clipped"></b></span></div>
 <div class="results">
-<section class="panel plotPanel"><div class="row"><h2 id="plot-title">散布図</h2><button id="save" disabled>PNGを保存</button></div><p id="rejection" role="status" style="color:#bf202b;font-weight:bold" hidden></p><img id="plot" alt="選択した分析方法の結果"></section>
+<section class="panel plotPanel"><div class="row"><h2 id="plot-title">散布図</h2><button id="save" disabled>PNGを保存</button></div><button type="button" id="original-points" aria-pressed="true" disabled>元ラベルで点を表示：オン</button><p id="point-description" class="muted"></p><p id="rejection" role="status" style="color:#bf202b;font-weight:bold" hidden></p><img id="plot" alt="選択した分析方法の結果"></section>
 <div class="diagnostics">
 <section class="panel"><h2>二変量正規性</h2><p id="decision" class="diagnosis"></p><p id="hz"></p><small id="test-note"></small><img id="qq" alt="マハラノビス距離の二乗と理論カイ二乗分位点の比較"><small id="qq-note" hidden>点が破線に沿うほど、観測距離の分布が理論分布に近くなります。</small></section>
 <section class="panel" id="ellipse-panel" hidden><h2>楕円内の観測点</h2><div id="cover"></div><p><small id="tail-count"></small></p></section>
@@ -564,7 +571,7 @@ img{width:100%;display:block} img:not([src]),[hidden]{display:none!important}
 const $ = id => document.getElementById(id);
 const methods = [...document.querySelectorAll('[data-method]')];
 const titles = {scatter:'散布図', kde:'密度等高線（KDE）', gmm:'成分数の比較（GMM）'};
-let current = null, last = null, comparisonLast = null, busy = false, stopped = false, mode = 'scatter';
+let current = null, last = null, comparisonLast = null, busy = false, stopped = false, mode = 'scatter', originalPoints = true;
 
 function showMode(next) {
   mode = next;
@@ -582,6 +589,7 @@ function setBusy(value) {
   $('shutdown').disabled = value || stopped;
   $('compare-models').disabled = value || !current;
   $('save-comparison').disabled = value || !comparisonLast;
+  $('original-points').disabled = value || !current || $('label').value === '-1';
   $('file').disabled = value;
   $('update').disabled = value || !current;
   $('save').disabled = value || !last;
@@ -608,6 +616,10 @@ function table(target, headers, rows) {
 }
 function install(info, name) {
   current = info;
+  originalPoints = true;
+  $('original-points').setAttribute('aria-pressed', 'true');
+  $('original-points').textContent = '元ラベルで点を表示：オン';
+  $('point-description').textContent = '';
   comparisonLast = null;
   $('comparison-panel').hidden = true;
   last = null;
@@ -639,11 +651,16 @@ function install(info, name) {
   }
   $('tickmode').value = 'auto';
   $('tick-input').hidden = true;
+  $('original-points').setAttribute('aria-pressed', originalPoints);
+  $('original-points').textContent = '元ラベルで点を表示：'+(originalPoints ? 'オン' : 'オフ');
+  $('point-description').textContent = data.original_points
+    ? '点の色・形：元ラベル。GMMの楕円・KDEは推定成分に基づきます。'
+    : data.mode === 'gmm' ? '点の色：GMM推定成分。' : '点は単色で表示します。';
   $('axis-summary').textContent = '';
   table($('preview'), info.headers.slice(0,20), info.preview.map(row => row.slice(0,20)));
 }
 async function plot() {
-  const options = {csv:current.csv, mode, label:$('label').value};
+  const options = {csv:current.csv, mode, label:$('label').value, original_points:originalPoints};
   options.component_view = $('component-view').value;
   options.component_bandwidth = $('component-bandwidth').value;
   options.component_levels = [...document.querySelectorAll('[name=component-level]:checked')].map(el=>el.value);
@@ -795,6 +812,15 @@ $('save-comparison').onclick = () => action(async () => {
   link.href='data:image/png;base64,'+data.plot;
   link.download='archaeo_scatter_gmm_comparison.png';
   link.click();
+});
+$('label').onchange = () => {
+  $('original-points').disabled = busy || !current || $('label').value === '-1';
+};
+$('original-points').onclick = () => action(async () => {
+  const previous = originalPoints;
+  originalPoints = !originalPoints;
+  try { await plot(); }
+  catch (err) { originalPoints = previous; throw err; }
 });
 $('component-view').onchange = () => action(async () => {
   if (mode === 'gmm' && current) await plot();
